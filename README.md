@@ -1,25 +1,15 @@
-# StudAI code sample: the tutor turn is checked, not trusted
+# studai-sample
 
-StudAI is a Hungarian AI math tutor I am building. This folder holds two small modules from the backend. The full repo is private.
+Two files from the backend of StudAI, a math tutor for Hungarian students I'm building. The main repo is private, so this won't run on its own. It's here to show how a tutor turn is put together.
 
-## The idea
+The short version: the LLM doesn't decide anything about the math. It only writes the text. Before that, the student's problem gets compiled into a typed form (I call it MathIR), a deterministic verifier and solver check the student's step, and the system keeps track of the student's state (help level, errors, misconceptions). From that it picks a teaching move from a fixed list, like ASK_NEXT_STEP or ASK_JUSTIFICATION.
 
-The LLM is not the math authority. It writes the words a student sees, and that is all. The math and the teaching decisions come from a deterministic system around it.
+## What's in here
 
-A tutor turn works like this:
+`action_validator.py` checks the chosen move against the ontology and the student's state and fixes it if it's wrong. For example a question move with no expected response, a help level that move doesn't allow, or positive feedback on a step that's actually false.
 
-1. The student's problem is compiled into MathIR, a typed representation of entities, statements and goals.
-2. A deterministic verifier and solver work out what is true and what the student's step means.
-3. The system keeps explicit student state (help level, errors, misconceptions) and picks a teaching move from a fixed action ontology, such as ASK_NEXT_STEP or ASK_JUSTIFICATION.
-4. `action_validator.py` checks that chosen action against the ontology and the current state, and repairs it if it is invalid (for example a question move with no response demand, or a help level that is not allowed).
-5. Only then does the LLM write the reply.
-6. `validation_loop.py` runs generate, then audit, then repair. The auditor pulls math claims out of the reply and re-checks them with the verifier, and checks that the reply really performs the chosen move and does not leak the answer. A failed reply is never shown to the student. After a few failed attempts the system falls back to a deterministic template, which is audited again.
+`validation_loop.py` runs after the LLM writes a reply. The auditor pulls the math claims out of the reply and re-checks them, and checks that the reply actually does the chosen move and doesn't give away the answer. If it fails, the issues go back to the model and it tries again, 3 attempts max. A failed reply never reaches the student. If all attempts fail it uses a fixed template for that move, and audits that too. If even that fails, or the auditor is down, the student gets a short "I can't answer safely right now" message.
 
-## Evaluation
+## Evals
 
-Problem-to-MathIR fidelity is scored against a held-out gold set of Hungarian problems. The gold items are kept out of prompts and training data so the scores stay honest. That is why they are not in this sample.
-
-## Files
-
-- `validation_loop.py`: the generate, audit, repair loop with a safe fallback.
-- `action_validator.py`: deterministic validation and repair of the chosen teaching move.
+I score the problem to MathIR step against a gold set of Hungarian problems. Those are kept out of prompts and out of this repo so they stay a real test.

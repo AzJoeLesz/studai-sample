@@ -1,8 +1,7 @@
-"""§26 Tutor response validation loop.
+"""Generate, audit, repair loop for tutor replies.
 
-Generate → math audit → action audit → pass or bounded repair/regenerate.
-A failed candidate MUST NEVER be released. Exhausted retries fall back to a
-deterministic action-aware template (then re-audited as a safety net).
+A reply that fails the audit is never sent. If all attempts fail we use the
+fixed template for the action, and audit that too.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from app.responder.fallback_templates import action_aware_fallback
 
 logger = logging.getLogger(__name__)
 
-# §26.3: initial generation + up to two repair attempts
+# first try + 2 repairs
 DEFAULT_MAX_ATTEMPTS = 3
 
 GenerateFn = Callable[..., Awaitable[str]]
@@ -54,14 +53,8 @@ async def run_validation_loop(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     use_async_audit: bool = True,
 ) -> ValidationLoopResult:
-    """Run the §26 generate → audit → repair loop.
-
-    Invariants:
-    - At most ``max_attempts`` generated candidates are considered.
-    - A candidate that fails audit is never returned.
-    - If all candidates and their fallback fail audit, only the pre-vetted
-      audit failure message is released.
-    """
+    """Never returns a candidate that failed audit. If the fallback fails
+    too, returns the fixed "can't answer safely" message."""
     attempts = max(1, int(max_attempts))
     last_issues: list[str] = []
     attempt_issues: list[list[str]] = []
@@ -93,7 +86,7 @@ async def run_validation_loop(
         )
 
         if audit_result is None:
-            # Auditor unavailable / crash on this attempt — do not release text.
+            # auditor down, fail closed
             logger.error(
                 "response_audit_unavailable_fail_closed",
                 extra={"attempt": attempt + 1},
@@ -119,7 +112,7 @@ async def run_validation_loop(
             extra={"attempt": attempt + 1, "issues": last_issues},
         )
 
-    # Exhausted / unavailable → deterministic fallback; never return last candidate.
+    # out of attempts: use the template, not the last candidate
     fallback = action_aware_fallback(action)
     fallback_audit = await _run_audit(
         fallback,
@@ -130,11 +123,10 @@ async def run_validation_loop(
         working_state,
         ontology,
         audit_fn=audit_fn,
-        use_async_audit=False,  # fallback is offline; skip optional LLM
+        use_async_audit=False,  # no LLM audit for the template
     )
 
     if fallback_audit is not None and fallback_audit.passed:
-        # Safe template released after failed LLM/offline candidates.
         return ValidationLoopResult(
             response_text=fallback,
             audit_passed=True,
@@ -144,8 +136,7 @@ async def run_validation_loop(
             attempt_issues=attempt_issues,
         )
 
-    # This fixed, non-mathematical text is the only output permitted when
-    # auditing is unavailable or rejects every audited response.
+    # last resort, no math in it
     ultra = "Most nem tudok biztonságosan válaszolni. Kérlek, próbáld meg később."
     logger.error(
         "audit_fallback_failed_using_ultra_safe",
@@ -208,7 +199,7 @@ async def _run_audit(
             ontology=ontology,
         )
     except TypeError:
-        # Custom audit_fn without newer kwargs (tests / older stubs).
+        # older audit_fn stubs don't take ontology
         try:
             if audit_fn is not None:
                 return audit_fn(
